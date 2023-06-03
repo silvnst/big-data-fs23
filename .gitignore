@@ -1,0 +1,9 @@
+istdaten_*.csv
+Daten/v2/_all_combined.csv
+credentials.py
+Daten/v3/*
+Zipped_data/*
+ist-daten-2023*
+App/Modell/rf*
+App/Modell/random_search_rf*
+_silvan*

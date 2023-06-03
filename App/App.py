@@ -1,0 +1,304 @@
+#### Overall setup 
+#########################################################
+
+import streamlit as st  # import streamlit library
+import pandas as pd # import pandas library
+import seaborn as sns   # import seaborn library
+from datetime import date, datetime, time # import datetime library
+import pickle # import pickle library
+import xgboost as xgb # import xgboost library
+import numpy as np # import numpy library
+from helper.connect import create_weather # import function from connect.py
+from helper.get_connection import get_connection # import function from get_connection.py
+import pytz # import pytz library
+import isodate # import isodate library
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score # import metrics from sklearn
+from sklearn.model_selection import train_test_split # import train_test_split from sklearn
+import helper.config # import config.py
+from helper.functions import get_twitter_data, process_twitter_data, add_twitter_info # import functions.py
+import snscrape.modules.twitter as sntwitter
+import os # import os library
+
+
+# Set page config
+st.set_page_config(
+    page_title= "Zugverspätung.ch",
+    page_icon = "🚄",
+    layout="wide"
+    )
+
+# Change directory to App
+cwd = os.getcwd()
+if not cwd.endswith('App'):
+    os.chdir(os.getcwd() + '/App')
+
+# set system timezone to swiss timezone
+os.environ['TZ'] = 'Europe/Zurich'
+
+# Load model
+st.cache_data()
+def load_model():
+    model = pickle.load(open("./Modell/model.pkl", "rb"))
+    # model = pickle.load(open("./Modell/model_twitter.pkl", "rb"))
+    return model
+
+# Load data
+st.cache_data()
+def load_data():
+    df = pd.read_csv('./Daten/data_expanded/data_with_features.csv')
+    # df = pd.read_csv('./Daten/data_expanded/data_with_features_twitter.csv')
+    df.drop(columns=['BETRIEBSTAG'], inplace=True)
+    df_cols = df.columns
+    feiertage_data = pd.read_excel('./Daten/Feiertage_Haltestellen_roh.xlsx', sheet_name='data')
+    haltestellen_data = pd.read_excel('./Daten/koordinaten.xlsx')
+    return df, df_cols, feiertage_data, haltestellen_data
+
+# Get twitter data
+st.cache_data()
+def get_twitter():
+    today = date.today()
+    query = 'from:railinfo_sbb since:' + today.strftime('%Y-%m-%d') + ' until:' + today.strftime('%Y-%m-%d') # Define twitter query
+    tweets_raw = get_twitter_data(query=query, max_tweets=15, haltestellen=[x.lower() for x in helper.config.HALTESTELLEN])
+    if len(tweets_raw) > 0:
+        tweets = process_twitter_data(tweets_raw, haltestellen=[x.lower() for x in helper.config.HALTESTELLEN], linien=[x.lower() for x in helper.config.LINIEN])
+        return tweets
+    return None    
+
+#### Define general functions
+#########################################################
+def header():
+    # add logo
+    st.image('./img/logo_w.png', width=200)
+    # set header
+    header_html = "<div style='background-color: #eb0000; padding: 10px;'>"
+    header_html += "<h1 style='color: #ffffff;'>SBB - Verspätungsvorhersage</h1></div>"
+    st.markdown(header_html, unsafe_allow_html=True)
+    st.markdown("🚄 NEU – Berechne die vorhergesagte Verspätung deines Zuges!")
+    # hide menu
+    hide_menu_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            footer:after {
+            content:'Created by: Deniz, Felix, Jeff, Loris & Silvan'; 
+            visibility: visible;
+            display: block;
+            color: #000000;
+            }
+            </style>
+            """ 
+    st.markdown(hide_menu_style, unsafe_allow_html=True)
+
+def user_input(df):
+    # Define layout
+    row1_col1, row1_col2= st.columns([1,1])
+    
+    # Define user inputs
+    ab, an = [col for col in df.columns if col.startswith('haltestelle_ab')], [col for col in df.columns if col.startswith('haltestelle_an')]   
+    ab_mapping = {ab.split('_')[2]: ab for ab in ab}
+    an_mapping = {an.split('_')[2]: an for an in an}
+    abfahrt = row1_col1.selectbox('Abfahrt', ab_mapping.keys(), index=0)
+    ankunft = row1_col1.selectbox('Ankunft', an_mapping.keys(), index=1)
+    datum = row1_col2.date_input("Bitte wähle das Datum deiner Zugreise", value=date.today())
+    selected_departure_time = row1_col2.time_input("Bitte wähle die Abfahrtszeit deines Zuges", value=datetime.now(pytz.timezone(os.environ['TZ'])).time())
+    return ab, an, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping
+
+def format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping):
+    weekday = datum.weekday()
+    input_time = str(selected_departure_time).split(':')
+    hour = int(input_time[0])
+    minute = int(input_time[1])
+    abfahrt_long = ab_mapping[abfahrt]
+    ankunft_long = an_mapping[ankunft]
+    datetime_value = datetime.combine(datum, selected_departure_time)
+    datetime_connection = datetime_value.strftime('%Y-%m-%dT%H:%M:%S')
+    haltestelle_ab_info = int(haltestellen_data.loc[haltestellen_data['Bahnhof'] == abfahrt, 'info'].values[0])
+    haltestelle_an_info = int(haltestellen_data.loc[haltestellen_data['Bahnhof'] == ankunft, 'info'].values[0])
+    feiertage_data['datum'] = pd.to_datetime(feiertage_data['datum'], format='%d.%m.%Y').dt.date
+    return weekday, hour, minute, abfahrt_long, ankunft_long, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data
+
+def get_feiertag(feiertage_data, datum):
+    # Check if date is a holiday
+    if datum in feiertage_data['datum'].values:
+        feiertag = 1
+    else:
+        feiertag = 0
+    return feiertag
+
+def create_df(ab, an, abfahrt_long, ankunft_long, weekday, hour, minute, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols):
+    # Get column names
+    linien_cols = [col for col in df_cols if col.startswith('LINIEN_TEXT')]
+    haltestellen_ab_cols = [col for col in df_cols if col.startswith('haltestelle_ab')]
+    haltestellen_an_cols = [col for col in df_cols if col.startswith('haltestelle_an')]
+    einschr_cols = [col for col in df_cols if col.startswith('Einschr_type')]
+    dist_overlap = [col for col in df_cols if col.startswith('disturbance_overlap')]
+    # Define column names and set values to 0
+    column_names = ['weekday', 'ab_hour', 'ab_minute'] + dist_overlap + ['feiertag', 'Temperatur', 'Niederschlag',
+            'Luftfeuchtigkeit', 'Wind', ] + haltestellen_ab_cols + haltestellen_an_cols + linien_cols + einschr_cols
+    column_values = {col: 0 for col in column_names}
+    # Create dataframe
+    df_models = pd.DataFrame(column_values, index=[0])
+    # Fill dataframe
+    df_models['weekday'] = weekday
+    df_models['ab_hour'] = hour
+    df_models['ab_minute'] = minute
+    df_models['feiertag'] = feiertag
+    df_models['Temperatur'] = Temperatur
+    df_models['Niederschlag'] = Niederschlag
+    df_models['Luftfeuchtigkeit'] = Luftfeuchtigkeit
+    df_models['Wind'] = Wind
+    if dist_overlap != []:
+        df_models['disturbance_overlap'] = False
+    for i in ab:
+        if i == abfahrt_long:
+            df_models[i] = 1
+    for i in an:
+        if i == ankunft_long:
+            df_models[i] = 1
+
+    # select add linien info       
+    for i in linien_cols:
+        if i.split('_')[2] == line_text:
+            df_models[i] = 1
+
+    return df_models
+
+
+#### Define main app function
+#########################################################
+def connection_app():
+    # Load model
+    model = load_model()
+
+    # Load data
+    df, df_cols, feiertage_data, haltestellen_data = load_data()
+    # Define general header of section
+    header()
+    # Define header of section
+    st.header("Verbindung suchen")
+
+    # get user input
+    ab, an, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping = user_input(df)
+
+    # Format Data for further processing
+    weekday, hour, minute, abfahrt_long, ankunft_long, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data = format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping)
+
+    # get feiertag
+    feiertag = get_feiertag(feiertage_data, datum)
+
+    # get relevant connections
+    relevant_connections = df.loc[(df[abfahrt_long] == 1) & (df[ankunft_long] == 1)] # get relevant connections
+
+    # get column names starting with LINIEN_TEXT
+    linien_list = [col.split('_')[2] for col in relevant_connections.columns if col.startswith('LINIEN_TEXT')] # get linien from column names of relevant connections
+
+    #### Access API information
+    #########################################################
+
+    # Check for errors and get weather data
+    if datetime_value <= datetime.now() - pd.Timedelta(minutes=5):
+        st.error('Bitte wähle ein Datum in der Zukunft')
+    elif datetime_value > datetime.now() + pd.Timedelta(days=5):
+        st.error('Bitte wähle ein Datum in den nächsten 5 Tagen, damit wir dir eine Vorhersage machen können mit Wetterdaten')
+    else:
+        Temperatur, Niederschlag, Luftfeuchtigkeit, Schnee, Wind = create_weather(abfahrt, datetime_value)
+    
+    # Get data form SBB API, if abfahrt and ankunft are not the same
+    if abfahrt == ankunft:
+        st.error('Bitte wähle eine andere Ankunftsstation. Ankunft und Abfahrt dürfen nicht identisch sein.')
+    else:
+        departure, arrival, duration, line_id, prediction_available, line_text = get_connection(haltestelle_ab_info, abfahrt, haltestelle_an_info, ankunft, datetime_connection, linien_list)
+    
+    # predict delay
+    if st.button('Verbindungen anzeigen'):
+        for i in range(len(departure)):
+            # convert utc time to local time
+            utc_time_dep = datetime.strptime(departure[i], "%Y-%m-%dT%H:%M:%SZ")
+            local_timezone = pytz.timezone('Europe/Zurich')
+            local_time_dep = utc_time_dep.astimezone(local_timezone).strftime("%Y-%m-%d %H:%M")
+            utc_time_arr = datetime.strptime(arrival[i], "%Y-%m-%dT%H:%M:%SZ")
+            local_time_arr = utc_time_arr.astimezone(local_timezone).strftime("%Y-%m-%d %H:%M")
+            
+            local_time_dep = (datetime.strptime(departure[i], "%Y-%m-%dT%H:%M:%SZ") + pd.Timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+            local_time_arr = (datetime.strptime(arrival[i], "%Y-%m-%dT%H:%M:%SZ") + pd.Timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+            
+            duration_time = isodate.parse_duration(duration[i])
+            duration_str = str(duration_time)
+
+            # Extract hours, minutes, and seconds from the duration string
+            hours = int(duration_str.split(':')[0])
+            minutes = int(duration_str.split(':')[1])
+            seconds = int(duration_str.split(':')[2])
+
+            # function to create df
+            df_models = create_df(ab, an, abfahrt_long, ankunft_long, weekday, hours, minutes, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols)
+
+            # Format the time as "hh:mm:ss"
+            formatted_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+            st.markdown(
+                f"""
+                <div class="connection">
+                    <table>
+                        <tr>
+                            <td><div class="departure">Abfahrt: <br><b>{local_time_dep.split(' ')[1]} - {abfahrt}</b></div></td>
+                            <td><div class="departure">Ankunft: <br><b>{local_time_arr.split(' ')[1]} - {ankunft}</b></div></td>
+                            <td><div class="departure">Dauer: <br><b>{formatted_time}</b></div></td>
+                            <td><div class="departure">Datum: <br><b>{local_time_dep.split(' ')[0]}</b></div></td>
+                        </tr>
+                    </table>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.markdown(
+            """
+            <style>
+            .connection {
+                background-color: #eb0000;
+                margin-bottom: 10px;
+                padding: 10px;
+                color: #ffffff;
+            }
+            table {
+                border-collapse: collapse;
+            }
+            table tr td {
+                border: none;
+            }
+            div [data-testid="stHorizontalBlock"] {
+                padding-bottom: 1rem;
+            }
+            div [data-testid="stHorizontalBlock"] p {
+                margin: 0;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+            )
+            st.subheader('Vorhersage für Ihre Zugverbindung')
+
+            row2_col1, row2_col2 = st.columns([1, 1])
+            row2_col1.markdown('**Abfahrtszeit:** {}'.format(local_time_dep))
+            row2_col1.markdown('**Ankunftszeit:** {}'.format(local_time_arr))
+            row2_col1.markdown('**Dauer:** {}'.format(formatted_time))
+            row2_col1.markdown(f"**Wochentag:** {datum.strftime('%A')} {'(Feiertag)' if feiertag == 1 else ''}")
+            row2_col1.markdown('**Linie:** {}'.format(line_text[i]))
+            row2_col2.markdown('**Temperatur:** {:.2f} °C'.format(Temperatur))
+            row2_col2.markdown('**Niederschlag:** {}'.format(Niederschlag))
+            row2_col2.markdown('**Luftfeuchtigkeit:** {}'.format(Luftfeuchtigkeit))
+            row2_col2.markdown('**Wind:** {}'.format(Wind))
+
+            # Predict delay
+            if prediction_available[i] == 1:
+                # twitter = get_twitter()
+                # if twitter != None:
+                #     X = add_twitter_info(df_models, twitter)
+                #     pd.get_dummies(X, columns=['Einschr_Type'])
+                # else:
+                X = df_models
+                delay_prediction = model.predict(X)[0]
+                row2_col2.markdown('**Vorhersage: :red[{:.4f}]** Minuten Verspätung'.format(delay_prediction))
+            else:
+                row2_col2.markdown('**Vorhersage:** :red[für diese Linie nicht verfügbar]')
+connection_app()
