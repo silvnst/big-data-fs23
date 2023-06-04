@@ -48,8 +48,9 @@ def data_new():
     d1 = pd.read_csv('./Daten/data_new/detail1.csv')
     d2 = pd.read_csv('./Daten/data_new/detail2.csv')
     data = pd.concat([d1, d2], axis=0)
-    na_cols = data.columns[data.isna().any()].tolist()
-    data = data.drop(na_cols, axis=1)
+    # na_cols = data.columns[data.isna().any()].tolist()
+    # data = data.drop(na_cols, axis=1)
+    data = data.dropna()
     # Assuming your dataframe is called 'df' and the dummy columns start with 'departure_'
     data['haltestelle_ab'] = data.filter(like='haltestelle_ab_').idxmax(axis=1)
     data['haltestelle_ab'] = data['haltestelle_ab'].str.replace('haltestelle_ab_', '')
