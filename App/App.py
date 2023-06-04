@@ -310,6 +310,9 @@ def connection_app():
                 X = df_models
                 delay_prediction = model.predict(X)[0]
                 row2_col2.markdown('**Vorhersage: :red[{:.4f}]** Minuten Verspätung'.format(delay_prediction))
+                metrics = pd.read_csv('./Modell/Orte/metrics.csv')
+                m = metrics[(metrics['modelname'] == 'XGBRegressor') & (metrics['station'] == abfahrt)]
+                row2_col2.markdown('**Vorhersagegenauigkeit: R2 von :red[{:.4f}]** und **RMSE von :red[{:.4f}]**'.format(m['R2'].values[0], m['RMSE'].values[0]))
             else:
                 row2_col2.markdown('**Vorhersage:** :red[für diese Linie nicht verfügbar]')
 connection_app()
