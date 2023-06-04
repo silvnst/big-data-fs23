@@ -7,3 +7,6 @@ ist-daten-2023*
 App/Modell/rf*
 App/Modell/random_search_rf*
 _silvan*
+App/Modell/Orte/*_RandomForestRegressor.pkl
+App/Modell/Orte/Basel SBB_RandomForestRegressor.joblib
+App/Modell/Orte/St. Gallen_RandomForestRegressor.joblib
