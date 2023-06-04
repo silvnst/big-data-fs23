@@ -14,7 +14,7 @@ import pytz # import pytz library
 import isodate # import isodate library
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score # import metrics from sklearn
 from sklearn.model_selection import train_test_split # import train_test_split from sklearn
-import helper.config # import config.py
+import helper.config as config # import config.py
 from helper.functions import get_twitter_data, process_twitter_data, add_twitter_info # import functions.py
 import snscrape.modules.twitter as sntwitter
 import os # import os library
@@ -37,17 +37,23 @@ os.environ['TZ'] = 'Europe/Zurich'
 
 # Load model
 st.cache_data()
-def load_model():
-    model = pickle.load(open("./Modell/model.pkl", "rb"))
+def load_model(station):
+    model = pickle.load(open(f'./Modell/Orte/{station}_XGBRegressor.pkl', "rb"))
+    # model = pickle.load(open("./Modell/model.pkl", "rb"))
     # model = pickle.load(open("./Modell/model_twitter.pkl", "rb"))
     return model
 
 # Load data
 st.cache_data()
 def load_data():
-    df = pd.read_csv('./Daten/data_expanded/data_with_features.csv')
+    # df = pd.read_csv('./Daten/data_expanded/data_with_features.csv')
     # df = pd.read_csv('./Daten/data_expanded/data_with_features_twitter.csv')
+    df = pd.read_csv('./Daten/data_new/detail.csv')
     df.drop(columns=['BETRIEBSTAG'], inplace=True)
+    # Assuming your dataframe is called 'df' and the dummy columns start with 'departure_'
+    df['haltestelle_ab'] = df.filter(like='haltestelle_ab_').idxmax(axis=1)
+    df['haltestelle_ab'] = df['haltestelle_ab'].str.replace('haltestelle_ab_', '')
+    df = df.drop(df.filter(like='haltestelle_ab_').columns, axis=1)
     df_cols = df.columns
     feiertage_data = pd.read_excel('./Daten/Feiertage_Haltestellen_roh.xlsx', sheet_name='data')
     haltestellen_data = pd.read_excel('./Daten/koordinaten.xlsx')
@@ -58,9 +64,9 @@ st.cache_data()
 def get_twitter():
     today = date.today()
     query = 'from:railinfo_sbb since:' + today.strftime('%Y-%m-%d') + ' until:' + today.strftime('%Y-%m-%d') # Define twitter query
-    tweets_raw = get_twitter_data(query=query, max_tweets=15, haltestellen=[x.lower() for x in helper.config.HALTESTELLEN])
+    tweets_raw = get_twitter_data(query=query, max_tweets=15, haltestellen=[x.lower() for x in config.HALTESTELLEN])
     if len(tweets_raw) > 0:
-        tweets = process_twitter_data(tweets_raw, haltestellen=[x.lower() for x in helper.config.HALTESTELLEN], linien=[x.lower() for x in helper.config.LINIEN])
+        tweets = process_twitter_data(tweets_raw, haltestellen=[x.lower() for x in config.HALTESTELLEN], linien=[x.lower() for x in config.LINIEN])
         return tweets
     return None    
 
@@ -94,28 +100,29 @@ def user_input(df):
     row1_col1, row1_col2= st.columns([1,1])
     
     # Define user inputs
-    ab, an = [col for col in df.columns if col.startswith('haltestelle_ab')], [col for col in df.columns if col.startswith('haltestelle_an')]   
-    ab_mapping = {ab.split('_')[2]: ab for ab in ab}
-    an_mapping = {an.split('_')[2]: an for an in an}
-    abfahrt = row1_col1.selectbox('Abfahrt', ab_mapping.keys(), index=0)
-    ankunft = row1_col1.selectbox('Ankunft', an_mapping.keys(), index=1)
+    # ab, an = [col for col in df.columns if col.startswith('haltestelle_ab')], [col for col in df.columns if col.startswith('haltestelle_an')]   
+    # ab_mapping = {ab.split('_')[2]: ab for ab in ab}
+    # an_mapping = {an.split('_')[2]: an for an in an}
+    # abfahrt = row1_col1.selectbox('Abfahrt', ab_mapping.keys(), index=0)
+    # ankunft = row1_col1.selectbox('Ankunft', an_mapping.keys(), index=1)
+    abfahrt = row1_col1.selectbox('Abfahrt', config.HALTESTELLEN, index=0)
+    ankunft = row1_col1.selectbox('Ankunft', config.HALTESTELLEN, index=1)
     datum = row1_col2.date_input("Bitte wähle das Datum deiner Zugreise", value=date.today())
     selected_departure_time = row1_col2.time_input("Bitte wähle die Abfahrtszeit deines Zuges", value=datetime.now(pytz.timezone(os.environ['TZ'])).time())
-    return ab, an, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping
+    return abfahrt, ankunft, datum, selected_departure_time
 
-def format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping):
+def format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time):
     weekday = datum.weekday()
+    week = datum.isocalendar().week
     input_time = str(selected_departure_time).split(':')
     hour = int(input_time[0])
     minute = int(input_time[1])
-    abfahrt_long = ab_mapping[abfahrt]
-    ankunft_long = an_mapping[ankunft]
     datetime_value = datetime.combine(datum, selected_departure_time)
     datetime_connection = datetime_value.strftime('%Y-%m-%dT%H:%M:%S')
     haltestelle_ab_info = int(haltestellen_data.loc[haltestellen_data['Bahnhof'] == abfahrt, 'info'].values[0])
     haltestelle_an_info = int(haltestellen_data.loc[haltestellen_data['Bahnhof'] == ankunft, 'info'].values[0])
     feiertage_data['datum'] = pd.to_datetime(feiertage_data['datum'], format='%d.%m.%Y').dt.date
-    return weekday, hour, minute, abfahrt_long, ankunft_long, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data
+    return weekday, week, hour, minute, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data
 
 def get_feiertag(feiertage_data, datum):
     # Check if date is a holiday
@@ -125,21 +132,22 @@ def get_feiertag(feiertage_data, datum):
         feiertag = 0
     return feiertag
 
-def create_df(ab, an, abfahrt_long, ankunft_long, weekday, hour, minute, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols):
+def create_df(ankunft, week, weekday, hour, minute, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols):
     # Get column names
     linien_cols = [col for col in df_cols if col.startswith('LINIEN_TEXT')]
-    haltestellen_ab_cols = [col for col in df_cols if col.startswith('haltestelle_ab')]
+    # haltestellen_ab_cols = [col for col in df_cols if col.startswith('haltestelle_ab')]
     haltestellen_an_cols = [col for col in df_cols if col.startswith('haltestelle_an')]
     einschr_cols = [col for col in df_cols if col.startswith('Einschr_type')]
     dist_overlap = [col for col in df_cols if col.startswith('disturbance_overlap')]
     # Define column names and set values to 0
     column_names = ['weekday', 'ab_hour', 'ab_minute'] + dist_overlap + ['feiertag', 'Temperatur', 'Niederschlag',
-            'Luftfeuchtigkeit', 'Wind', ] + haltestellen_ab_cols + haltestellen_an_cols + linien_cols + einschr_cols
+            'Luftfeuchtigkeit', 'Wind', 'week'] + haltestellen_an_cols + linien_cols + einschr_cols
     column_values = {col: 0 for col in column_names}
     # Create dataframe
     df_models = pd.DataFrame(column_values, index=[0])
     # Fill dataframe
     df_models['weekday'] = weekday
+    df_models['week'] = week
     df_models['ab_hour'] = hour
     df_models['ab_minute'] = minute
     df_models['feiertag'] = feiertag
@@ -149,11 +157,10 @@ def create_df(ab, an, abfahrt_long, ankunft_long, weekday, hour, minute, feierta
     df_models['Wind'] = Wind
     if dist_overlap != []:
         df_models['disturbance_overlap'] = False
-    for i in ab:
-        if i == abfahrt_long:
-            df_models[i] = 1
-    for i in an:
-        if i == ankunft_long:
+
+    # Get col with ankunft in name and set value to 1
+    for i in haltestellen_an_cols:
+        if i.split('_')[2] == ankunft:
             df_models[i] = 1
 
     # select add linien info       
@@ -167,8 +174,6 @@ def create_df(ab, an, abfahrt_long, ankunft_long, weekday, hour, minute, feierta
 #### Define main app function
 #########################################################
 def connection_app():
-    # Load model
-    model = load_model()
 
     # Load data
     df, df_cols, feiertage_data, haltestellen_data = load_data()
@@ -178,16 +183,19 @@ def connection_app():
     st.header("Verbindung suchen")
 
     # get user input
-    ab, an, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping = user_input(df)
+    abfahrt, ankunft, datum, selected_departure_time = user_input(df)
 
     # Format Data for further processing
-    weekday, hour, minute, abfahrt_long, ankunft_long, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data = format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time, ab_mapping, an_mapping)
+    weekday, week, hour, minute, datetime_value, datetime_connection, haltestelle_ab_info, haltestelle_an_info, feiertage_data = format_data(feiertage_data, haltestellen_data, abfahrt, ankunft, datum, selected_departure_time)
 
     # get feiertag
     feiertag = get_feiertag(feiertage_data, datum)
 
+    # filter data
+    df = df[df['haltestelle_ab'] == abfahrt]
+
     # get relevant connections
-    relevant_connections = df.loc[(df[abfahrt_long] == 1) & (df[ankunft_long] == 1)] # get relevant connections
+    relevant_connections = df.loc[df[f'haltestelle_an_{ankunft}'] == 1] # get relevant connections
 
     # get column names starting with LINIEN_TEXT
     linien_list = [col.split('_')[2] for col in relevant_connections.columns if col.startswith('LINIEN_TEXT')] # get linien from column names of relevant connections
@@ -209,6 +217,9 @@ def connection_app():
     else:
         departure, arrival, duration, line_id, prediction_available, line_text = get_connection(haltestelle_ab_info, abfahrt, haltestelle_an_info, ankunft, datetime_connection, linien_list)
     
+    # Get twitter data
+    # twitter = get_twitter()
+
     # predict delay
     if st.button('Verbindungen anzeigen'):
         for i in range(len(departure)):
@@ -231,7 +242,7 @@ def connection_app():
             seconds = int(duration_str.split(':')[2])
 
             # function to create df
-            df_models = create_df(ab, an, abfahrt_long, ankunft_long, weekday, hours, minutes, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols)
+            df_models = create_df(ankunft, weekday, week, hours, minutes, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols)
 
             # Format the time as "hh:mm:ss"
             formatted_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
@@ -291,7 +302,7 @@ def connection_app():
 
             # Predict delay
             if prediction_available[i] == 1:
-                # twitter = get_twitter()
+                model = load_model(abfahrt)
                 # if twitter != None:
                 #     X = add_twitter_info(df_models, twitter)
                 #     pd.get_dummies(X, columns=['Einschr_Type'])
@@ -299,6 +310,9 @@ def connection_app():
                 X = df_models
                 delay_prediction = model.predict(X)[0]
                 row2_col2.markdown('**Vorhersage: :red[{:.4f}]** Minuten Verspätung'.format(delay_prediction))
+                metrics = pd.read_csv('./Modell/Orte/metrics.csv')
+                m = metrics[(metrics['modelname'] == 'XGBRegressor') & (metrics['station'] == abfahrt)]
+                row2_col2.markdown('**Vorhersagegenauigkeit: R2 von :red[{:.4f}]** und **RMSE von :red[{:.4f}]**'.format(m['R2'].values[0], m['RMSE'].values[0]))
             else:
                 row2_col2.markdown('**Vorhersage:** :red[für diese Linie nicht verfügbar]')
 connection_app()

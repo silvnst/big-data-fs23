@@ -9,6 +9,7 @@ from xgboost import plot_importance
 import seaborn as sns
 import pydeck as pdk
 import os
+import helper.config as config
 
 # Change directory to App
 cwd = os.getcwd()
@@ -41,6 +42,73 @@ def create_long_df(df):
     df_long['haltestelle_an'] = df_long[haltestellen_cols].idxmax(axis=1).str.replace('haltestelle_an_', '')
     df_long['linie'] = df_long[linien_cols].idxmax(axis=1).str.replace('LINIEN_TEXT_', '')
     return df_long, haltestellen_cols, linien_cols
+
+st.cache_data()
+def data_new():
+    data = pd.read_csv('./Daten/data_new/detail.csv')
+    # Assuming your dataframe is called 'df' and the dummy columns start with 'departure_'
+    data['haltestelle_ab'] = data.filter(like='haltestelle_ab_').idxmax(axis=1)
+    data['haltestelle_ab'] = data['haltestelle_ab'].str.replace('haltestelle_ab_', '')
+    data.drop(data.filter(like='haltestelle_ab_').columns, axis=1, inplace=True)
+    data = data.drop('BETRIEBSTAG', axis=1)
+    return data
+
+def show_model_info(haltestellen, data):
+    metrics = pd.read_csv('./Modell/Orte/metrics.csv')
+    m = metrics[metrics['modelname'] == 'XGBRegressor']
+    m.sort_values(by='RMSE', inplace=True)
+    # Plot metrics
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=m, x='station', y='RMSE', hue='entries', palette="viridis", ax=ax)
+    ax.set_title('RMSE')
+    st.pyplot(fig)
+
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=m, x='RMSE', y='entries', hue='station', ax=ax)
+    st.pyplot(fig)
+    st.write(haltestellen)
+    for station in haltestellen:
+        # Load model
+        model = pickle.load(open(f'./Modell/Orte/{station}_XGBRegressor.pkl', "rb"))
+
+        # Filter the data for the current departure station
+        data_station = data[data['haltestelle_ab'] == station]
+
+        # Drop the departure station column
+        data_station = data_station.drop('haltestelle_ab', axis=1)
+
+        # Define X and y
+        X = data_station.drop('AN_diff', axis=1)
+        y = data_station['AN_diff']
+
+        # Split data into train and test set
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=4153)
+
+        # Predict y
+        y_pred = model.predict(X_test)
+
+        # define df_plot
+        df_plot = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
+
+        # plot
+        fig, ax = plt.subplots()
+        sns.scatterplot(data=df_plot, x='y_test', y='y_pred', alpha=0.1, ax=ax)
+        ax.set_xlabel('y_test (in Min)')
+        ax.set_ylabel('y_pred (in Min)')
+        ax.set_title(f'{station}')
+
+        # Calculate y_min and y_max
+        y_min = min(df_plot['y_test'].min(), df_plot['y_pred'].min())
+        y_max = max(df_plot['y_test'].max(), df_plot['y_pred'].max())
+
+        # Add line with x=y with y_min and y_max
+        ax.plot([y_min, y_max], [y_min, y_max], color='black')
+        st.pyplot(fig)
+
+
+haltestellen_new = config.HALTESTELLEN
+df_new = data_new()
+show_model_info(haltestellen_new, df_new)
 
 def create_locations(df):
      #Prepare coordinates and labels
