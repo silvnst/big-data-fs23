@@ -218,7 +218,7 @@ def connection_app():
         departure, arrival, duration, line_id, prediction_available, line_text = get_connection(haltestelle_ab_info, abfahrt, haltestelle_an_info, ankunft, datetime_connection, linien_list)
     
     # Get twitter data
-    twitter = get_twitter()
+    # twitter = get_twitter()
 
     # predict delay
     if st.button('Verbindungen anzeigen'):
@@ -303,11 +303,11 @@ def connection_app():
             # Predict delay
             if prediction_available[i] == 1:
                 model = load_model(abfahrt)
-                if twitter != None:
-                    X = add_twitter_info(df_models, twitter)
-                    pd.get_dummies(X, columns=['Einschr_Type'])
-                else:
-                    X = df_models
+                # if twitter != None:
+                #     X = add_twitter_info(df_models, twitter)
+                #     pd.get_dummies(X, columns=['Einschr_Type'])
+                # else:
+                X = df_models
                 delay_prediction = model.predict(X)[0]
                 row2_col2.markdown('**Vorhersage: :red[{:.4f}]** Minuten Verspätung'.format(delay_prediction))
             else:
