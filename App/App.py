@@ -48,7 +48,9 @@ st.cache_data()
 def load_data():
     # df = pd.read_csv('./Daten/data_expanded/data_with_features.csv')
     # df = pd.read_csv('./Daten/data_expanded/data_with_features_twitter.csv')
-    df = pd.read_csv('./Daten/data_new/detail.csv')
+    df1 = pd.read_csv('./Daten/data_new/detail1.csv')
+    df2 = pd.read_csv('./Daten/data_new/detail2.csv')
+    df = pd.concat([df1, df2], axis=0)
     df.drop(columns=['BETRIEBSTAG'], inplace=True)
     # Assuming your dataframe is called 'df' and the dummy columns start with 'departure_'
     df['haltestelle_ab'] = df.filter(like='haltestelle_ab_').idxmax(axis=1)
@@ -100,11 +102,6 @@ def user_input(df):
     row1_col1, row1_col2= st.columns([1,1])
     
     # Define user inputs
-    # ab, an = [col for col in df.columns if col.startswith('haltestelle_ab')], [col for col in df.columns if col.startswith('haltestelle_an')]   
-    # ab_mapping = {ab.split('_')[2]: ab for ab in ab}
-    # an_mapping = {an.split('_')[2]: an for an in an}
-    # abfahrt = row1_col1.selectbox('Abfahrt', ab_mapping.keys(), index=0)
-    # ankunft = row1_col1.selectbox('Ankunft', an_mapping.keys(), index=1)
     abfahrt = row1_col1.selectbox('Abfahrt', config.HALTESTELLEN, index=0)
     ankunft = row1_col1.selectbox('Ankunft', config.HALTESTELLEN, index=1)
     datum = row1_col2.date_input("Bitte wähle das Datum deiner Zugreise", value=date.today())
@@ -135,7 +132,6 @@ def get_feiertag(feiertage_data, datum):
 def create_df(ankunft, week, weekday, hour, minute, feiertag, Temperatur, Niederschlag, Luftfeuchtigkeit, Wind, line_text, df_cols):
     # Get column names
     linien_cols = [col for col in df_cols if col.startswith('LINIEN_TEXT')]
-    # haltestellen_ab_cols = [col for col in df_cols if col.startswith('haltestelle_ab')]
     haltestellen_an_cols = [col for col in df_cols if col.startswith('haltestelle_an')]
     einschr_cols = [col for col in df_cols if col.startswith('Einschr_type')]
     dist_overlap = [col for col in df_cols if col.startswith('disturbance_overlap')]
