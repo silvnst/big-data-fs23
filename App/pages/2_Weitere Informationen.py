@@ -62,6 +62,8 @@ def show_model_info(haltestellen, data):
     metrics = pd.read_csv('./Modell/Orte/metrics.csv')
     m = metrics[metrics['modelname'] == 'XGBRegressor']
     m.sort_values(by='RMSE', inplace=True)
+
+    st.table(m)
     
     # Plot metrics
     fig, ax = plt.subplots()
